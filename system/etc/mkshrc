@@ -1,0 +1,298 @@
+# Copyright (c) 2010
+#	Thorsten Glaser <t.glaser@tarent.de>
+# This file is provided under the same terms as mksh.
+#-
+# Minimal /system/etc/mkshrc for Android
+
+# Copyright (c) 2010, 2012, 2013, 2014
+#       Thorsten Glaser <tg@mirbsd.org>
+# This file is provided under the same terms as mksh.
+#-
+# Minimal /system/etc/mkshrc for Android
+#
+# Support: https://launchpad.net/mksh
+
+# Make a directory and cd into it in one step.
+mkcd() {
+    if test -n "$1"; then
+        mkdir -p "$1"
+        cd "$1"
+    fi
+}
+
+sudo() {
+  su -c "$@"
+}
+
+set_perm() {
+  sudo chown $2:$3 $1 || return 1
+  sudo chmod $4 $1 || return 1
+  (if [ -z $5 ]; then
+    case $1 in
+    *"system/vendor/app/"*) sudo chcon 'u:object_r:vendor_app_file:s0' $1 ;;
+    *"system/vendor/etc/"*) sudo chcon 'u:object_r:vendor_configs_file:s0' $1 ;;
+    *"system/vendor/overlay/"*) sudo chcon 'u:object_r:vendor_overlay_file:s0' $1 ;;
+    *"system/vendor/"*) sudo chcon 'u:object_r:vendor_file:s0' $1 ;;
+    *"data/chuser/"*) sudo chcon 'u:object_r:system_user_file:s0' $1 ;;
+    *) sudo chcon 'u:object_r:system_file:s0' $1 ;;
+    esac
+  else
+    sudo chcon $5 $1
+  fi) || return 1
+}
+
+if ((USER_ID)); then PS1='$'; else PS1='#'; fi
+
+export USER=$(id -un)
+export USERID=$(id -u)
+export HOME="/data/ssh/$USER"
+export USR="/data/ssh/usr"
+# Can be useful in Termux
+export PREFIX="$USR"
+export HOSTNAME=$(cat /proc/sys/kernel/hostname)
+
+if [ ! -d "/data/ssh" ]; then
+  sudo mkdir /data/ssh
+  set_perm /data/ssh 9997 9997 0777
+fi
+
+if [ ! -d "/data/ssh/$USER" ]; then
+  mkdir /data/ssh/$USER
+  mkdir $HOME
+  mkdir $USR
+
+  # Public directories
+  #ln -s /storage/self/primary/Download $HOME/Download
+
+  for path in etc bin lib var tmp share opt include; do
+    if [ ! -d "$USR/$path" ]; then
+      mkdir $USR/$path
+    fi
+  done
+
+  # Add Magisk's Busybox. Only works as root user.
+  ln -s /data/adb/magisk/busybox $USR/bin/busybox
+
+  if [ ! -d "$USR/etc/profile.d" ]; then
+    mkdir $USR/etc/profile.d
+    echo "alias sudo=\"su -c \"\$@\"\"" >$USR/etc/profile.d/sudo.sh
+    echo "notification() {\n  su -lp 2000 -c \"cmd notification post -S bigtext -t 'Mkshrc Service Mount Error' 'Tag' 'There was an errer while mounting your system as read-write or read-only.'\"\n}" >$USR/etc/profile.d/notification.sh
+  fi
+
+  if [ ! -f "$HOME/.mkshrc" ]; then
+    echo "# Aliases\nalias bsu='su -s bash'\nalias ls='ls -1A --color=always'\nalias lsa='ls --color=auto -A'" >$HOME/.mkshrc
+  fi
+fi
+
+if [ -d "/data/chuser/$USER" ]; then
+  # Loads user defined scripts
+  for script in $USR/etc/profile.d/*.sh; do
+    if [ -f $script ]; then
+      . $script
+    fi
+  done
+
+  if [ ! -f "$USR/etc/mkshrc" ]; then
+    ln -s $HOME/.mkshrc $USR/etc/mkshrc
+  fi
+
+  # Keep the storage clear and use user based mkshrc
+  if [ -f "$HOME/.mkshrc" ]; then
+    . $HOME/.mkshrc
+  fi
+fi
+
+PS1=$'\e[35m┌\e[0m\e[92m$USER@$HOSTNAME\e[0m:\e[34m${PWD:-?}\e[0m\n\e[35m└─\e[0m# '
+PS0="└─"
+
+export MKSHRCSYS_INSTALLED="true"
+export TMPDIR="$USR/tmp"
+export TERM="xterm-256color"
+export SHELL="/system/bin/bash"
+
+# PATH Binary Folder
+export SYSTEM_EXT_BIN="/system/system_ext/bin"
+export SYSTEM_BIN="/system/bin"
+export SYSTEM_PRODUCT_BIN="/system/product/bin"
+export VENDOR_BIN="/vendor/bin"
+export BIN_GET_BIN="/system/usr/share/bin-get/bin"
+## Node.js module requirements
+export YARN_BIN="/system/usr/share/.yarn/bin"
+export YARN_GLOBAL_BIN="$HOME/.config/yarn/global/node_modules/.bin"
+
+export PATH="$YARN_BIN:$YARN_GLOBAL_BIN:$SYSTEM_BIN:$SYSTEM_EXT_BIN:$SYSTEM_PRODUCT_BIN:$VENDOR_BIN:$USR/bin:$PATH"
+
+# Symlink /system into /usr. This is only a requirement for the Node.js module, to make binaries work.
+sudo mount -o rw,remount /
+if [ ! -d "/usr" ]; then
+  sudo ln -s /system /usr
+fi
+sudo mount -o ro,remount /
+
+unset set_perm sudo
+
+: ${TERM:=xterm-256color} ${HOME:=/} ${MKSH:=/system/bin/sh} ${HOSTNAME:=android}
+: ${SHELL:=$MKSH} ${USER:=$(getprop ro.product.device)}
+if (( USER_ID )); then PS1='$'; else PS1='#'; fi
+
+PS1='$HOSTNAME@$USER:${PWD:-?} '"$PS1 "
+export TERM HOME MKSH HOSTNAME SHELL USER PATH
+# Place your own aliases in /sdcard/.aliases for ease.
+
+for p in ~/.bin; do
+	[[ -d $p/. ]] || continue
+	[[ :$PATH: = *:$p:* ]] || PATH=$p:$PATH
+done
+
+unset p
+
+rootcheck(){
+  ROOT= && [ $USER = root ] || ROOT="su -c"
+}
+
+# Workaround for termius - scoped storage only
+if [ "$(pwd)" == "/data/data/com.server.auditor.ssh.client/files/private" ]; then
+  [ -r "/sdcard/.aliases" ] && cp -f "/sdcard/.aliases" "/data/data/com.server.auditor.ssh.client/files/private/" 2>/dev/null
+  . "/data/data/com.server.auditor.ssh.client/files/private/.aliases"
+elif [ -f "/sdcard/.aliases" ]; then
+  . "/sdcard/.aliases"
+fi
+
+export PS1=$'\e[35m┌\e[0m\e[92m$USER@$HOSTNAME\e[0m:\e[34m${PWD:-?}\e[0m\n\e[35m└─\e[0m# '
+
+alias 'ls'='ls -1A --color'
+alias 'lst'='ls -1At --color'
+
+#alias 'rm'='/system/bin/rm -r -v'
+#alias 'cp'='/system/bin/cp -R -v'
+#alias 'mv'='/system/bin/mv -R -v'
+
+alias 'rm'='rm -r -v'
+alias 'cp'='cp -g -r -v'
+alias 'mv'='mv -g -f -v'
+
+alias 'nano'='nano -f /system/etc/nanorc'
+
+alias '..'='cd ..'
+alias '...'='.. && ..'
+alias '....'='... && ..'
+alias '.....'='.... && ..'
+alias '......'='..... && ..'
+
+alias 'setup'='nano /system/etc/mkshrc'
+alias 'reload'='source /system/etc/mkshrc'
+
+alias 'rclone-web'='rclone rcd --rc-web-gui --rc-user=root --rc-pass=24nascr'
+
+export TERMUX=/data/data/com.termux/files
+
+export BAT_CONFIG_PATH=/system/etc/bat
+export BAT_PAGER=
+export BAT_THEME=TwoDark
+
+export HOME=/data/ssh/$USER
+cd $HOME
+
+export PATH=$PATH:/data/adb/modules/umbrella:/data/adb/modules/umbrella/system/bin:/data/ssh/root/bin:/data/adb/modules/ccbins/system/bin:/data/data/com.termux/files/usr/bin:/data/data/com.termux/files/usr/sbin:/data/data/com.termux/files/home/.local/bin:/data/data/com.termux/files/home/go/bin
+
+export NANORC=/system/etc/nanorc
+
+##################################################
+function twrpwipe ()
+{
+    echo "Wiping cache & dalvik";
+    chmod 0777 /cache/recovery;
+    echo "wipe cache\nwipe dalvik\ncmd reboot" >> /cache/recovery/openrecoveryscript;
+    reboot recovery
+}
+#################### UploadSERVER
+function uploadserver ()
+{
+    if [[ -n $1 ]]; then
+        file=$1;
+    else
+        echo -e "Select file to upload:";
+        read -ei "" file;
+    fi;
+    echo -en "Select remote folder:\n";
+    read -ei "/ffp/home/root/" serverdir;
+    if [[ "$@" > 1 ]]; then
+        for f in "$@";
+        do
+            echo -en "\033]0;Uploading $f\a";
+            echo -en "Uploading $f to $serverdir";
+            scp -r -i ~/.ssh/keypair $f root@192.168.1.20:$serverdir;
+            echo -en "\n$file uploaded to $serverdir\n";
+        done;
+        echo -en "\033]0; \a";
+    else
+        echo -en "\033]0;Uploading $file\a";
+        echo -en "Uploading $file to $serverdir";
+        scp -r -i ~/.ssh/keypair $file root@192.168.1.20:$serverdir;
+        echo -en "\n$file uploaded to $serverdir\n";
+        echo -en "\033]0; \a";
+    fi
+}
+##################################################
+#################### UploadPHONE
+function uploadphone ()
+{
+    if [[ -n $1 ]]; then
+        file=$1;
+    else
+        echo -e "Select file to upload:";
+        read -ei "" file;
+    fi;
+    echo -en "Select remote folder:\n";
+    read -ei "/data/data/com.termux/files/home/" phonedir;
+    if [[ "$@" > 1 ]]; then
+        for f in "$@";
+        do
+            echo -en "\033]0;Uploading $f\a";
+            echo -en "Uploading $f to $phonedir";
+            scp -r -i ~/.ssh/keypair $f root@192.168.1.15:$phonedir;
+            echo -en "\n$file uploaded to $phonedir\n";
+        done;
+        echo -en "\033]0; \a";
+    else
+        echo -en "\033]0;Uploading $file\a";
+        echo -en "Uploading $file to $phonedir";
+        scp -r -i ~/.ssh/keypair $file root@192.168.1.15:$phonedir;
+        echo -en "\n$file uploaded to $phonedir\n";
+        echo -en "\033]0; \a";
+    fi
+}
+##################################################
+#################### UploadTERMUX
+function uploadtermux ()
+{
+    if [[ -n $1 ]]; then
+        file=$1;
+    else
+        echo -e "Select file to upload:";
+        read -ei "" file;
+    fi;
+    echo -en "Select remote folder:\n";
+    read -ei "/data/data/com.termux/files/home/" phonedir;
+    if [[ "$@" > 1 ]]; then
+        for f in "$@";
+        do
+            echo -en "\033]0;Uploading $f\a";
+            echo -en "Uploading $f to $phonedir";
+            scp -r -P 8022 -i ~/.ssh/keypair $f user@192.168.1.15:$phonedir;
+            echo -en "\n$file uploaded to $phonedir\n";
+        done;
+        echo -en "\033]0; \a";
+    else
+        echo -en "\033]0;Uploading $file\a";
+        echo -en "Uploading $file to $phonedir";
+        scp -r -P 8022 -i ~/.ssh/keypair $file user@192.168.1.15:$phonedir;
+        echo -en "\n$file uploaded to $phonedir\n";
+        echo -en "\033]0; \a";
+    fi
+}
+##################################################
+alias 'neofetch'='neofetch --source ~/.ssh/umbrella.ascii'
+neofetch
+##################################################
+: place customizations above this line
